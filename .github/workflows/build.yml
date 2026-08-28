@@ -1,0 +1,50 @@
+name: Build
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  windows-msvc:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Add MSVC to PATH
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Build with MSBuild
+      run: |
+        msbuild FeihuaLing.sln /p:Configuration=Release /p:Platform=x64 /m
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: FeihuaLing-windows-x64
+        path: bin/x64/Release/FeihuaLing.exe
+
+  linux-gcc:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install dependencies
+      run: sudo apt-get update && sudo apt-get install -y cmake g++
+
+    - name: Configure CMake
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+    - name: Build
+      run: cmake --build build -j
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: FeihuaLing-linux-x64
+        path: build/FeihuaLing

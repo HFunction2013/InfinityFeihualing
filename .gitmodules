@@ -1,0 +1,6 @@
+[submodule "third_party/chinese-poetry"]
+	path = third_party/chinese-poetry
+	url = https://github.com/chinese-poetry/chinese-poetry.git
+[submodule "third_party/chinese-xinhua"]
+	path = third_party/chinese-xinhua
+	url = https://github.com/pwxcoo/chinese-xinhua.git

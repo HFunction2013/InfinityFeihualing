@@ -1,0 +1,38 @@
+# Build artifacts
+bin/
+obj/
+build/
+*.o
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+*.a
+FeihuaLing
+FeihuaLing_test
+test_game
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.sln.docstates
+
+# Saves (keep directory, ignore contents)
+saves/*
+!saves/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
