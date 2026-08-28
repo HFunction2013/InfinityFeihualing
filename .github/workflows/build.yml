@@ -48,3 +48,25 @@ jobs:
       with:
         name: FeihuaLing-linux-x64
         path: build/FeihuaLing
+
+  macos-clang:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install dependencies
+      run: brew install cmake
+
+    - name: Configure CMake
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+    - name: Build
+      run: cmake --build build -j
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: FeihuaLing-macos-universal
+        path: build/FeihuaLing
