@@ -17,6 +17,7 @@ void Game::setup(GameMode m, UsedGranularity g) {
     players.clear();
     current_player = 0;
     current_char.clear();
+    keyword.clear();
     game_over = false;
     winner.clear();
     history.clear();
@@ -31,7 +32,8 @@ void Game::add_player(const Player& p) {
 
 void Game::start() {
     // Build bot memories
-    if (mode == GameMode::Feihualing && poetry_db) {
+    bool is_poetry = (mode == GameMode::Feihualing || mode == GameMode::GushiJielong);
+    if (is_poetry && poetry_db) {
         for (auto& p : players) {
             if (p.is_bot()) p.build_memory(poetry_db->all_half_lines());
         }
@@ -41,8 +43,8 @@ void Game::start() {
         }
     }
 
-    // Pick starting character
-    if (mode == GameMode::Feihualing && poetry_db) {
+    // Pick starting character (only for chain modes: 古诗接龙 / 成语接龙)
+    if (mode == GameMode::GushiJielong && poetry_db) {
         // Pick a random half-line and use its last char
         std::string hl = poetry_db->random_half_line();
         current_char = last_cjk_char(hl);
@@ -119,14 +121,16 @@ void Game::mark_used_feihualing(const std::string& half_line, int poem_idx, cons
 // Validation
 // ---------------------------------------------------------------------------
 
-ValidateResult Game::validate_feihualing(const std::string& text) const {
+ValidateResult Game::validate_poetry(const std::string& text) const {
     ValidateResult r;
     std::string norm = PoetryDB::normalize(text);
     if (norm.empty()) { r.reason = "输入为空"; return r; }
 
+    // 飞花令: 固定关键字; 古诗接龙: 滚动目标字
+    std::string required = (mode == GameMode::Feihualing) ? keyword : current_char;
     // Must contain the required character
-    if (!current_char.empty() && norm.find(current_char) == std::string::npos) {
-        r.reason = "诗句中必须包含字「" + current_char + "」";
+    if (!required.empty() && norm.find(required) == std::string::npos) {
+        r.reason = "诗句中必须包含字「" + required + "」";
         return r;
     }
 
@@ -185,12 +189,28 @@ ValidateResult Game::validate_chengyu(const std::string& text) const {
     std::string norm = t2s::convert(utils::trim(text));
     if (norm.empty()) { r.reason = "输入为空"; return r; }
 
-    // Must start with required character
+    // Must match the required character (or its pinyin)
     if (!current_char.empty()) {
         std::string fc = IdiomDB::first_char(norm);
-        if (fc != current_char) {
-            r.reason = "成语必须以「" + current_char + "」开头";
-            return r;
+        if (pinyin_mode == PinyinMatch::Char) {
+            if (fc != current_char) {
+                r.reason = "成语必须以「" + current_char + "」开头";
+                return r;
+            }
+        } else {
+            bool strict = (pinyin_mode == PinyinMatch::PinyinTone);
+            std::string req_py = idiom_db ? idiom_db->get_pinyin(current_char) : "";
+            std::string fc_py = idiom_db ? idiom_db->get_pinyin(fc) : "";
+            if (req_py.empty() || fc_py.empty()) {
+                if (fc != current_char) {
+                    r.reason = "成语必须以「" + current_char + "」开头";
+                    return r;
+                }
+            } else if (!IdiomDB::pinyin_equal(req_py, fc_py, strict)) {
+                std::string mode_name = strict ? "拼音(含声调)" : "拼音";
+                r.reason = "成语首字" + mode_name + "必须为「" + req_py + "」(当前「" + fc_py + "」)";
+                return r;
+            }
         }
     }
 
@@ -212,8 +232,8 @@ ValidateResult Game::validate_chengyu(const std::string& text) const {
 }
 
 ValidateResult Game::validate(const std::string& text) const {
-    if (mode == GameMode::Feihualing) return validate_feihualing(text);
-    return validate_chengyu(text);
+    if (mode == GameMode::Chengyu) return validate_chengyu(text);
+    return validate_poetry(text);
 }
 
 // ---------------------------------------------------------------------------
@@ -228,15 +248,19 @@ bool Game::apply_move(const std::string& text) {
     std::string played = r.half_line;
     std::string next_char;
 
-    if (mode == GameMode::Feihualing) {
+    if (mode == GameMode::Feihualing || mode == GameMode::GushiJielong) {
         mark_used_feihualing(r.half_line, r.poem_idx, r.full_line);
-        next_char = last_cjk_char(r.half_line);
+        if (mode == GameMode::GushiJielong) {
+            next_char = last_cjk_char(r.half_line);
+            current_char = next_char;
+        }
+        // 飞花令: keyword 固定，不更新 current_char
     } else {
         used_half_lines.insert(r.half_line);
         next_char = IdiomDB::last_char(r.half_line);
+        current_char = next_char;
     }
 
-    current_char = next_char;
     current().score++;
     current().consecutive_skips = 0;
 
@@ -262,10 +286,12 @@ void Game::next_player() {
 
 std::vector<std::string> Game::get_candidates() const {
     std::vector<std::string> result;
-    if (current_char.empty()) return result;
+    std::string required = (mode == GameMode::Feihualing) ? keyword : current_char;
+    if (required.empty()) return result;
 
-    if (mode == GameMode::Feihualing && poetry_db) {
-        auto hls = poetry_db->half_lines_with_char(current_char);
+    bool is_poetry = (mode == GameMode::Feihualing || mode == GameMode::GushiJielong);
+    if (is_poetry && poetry_db) {
+        auto hls = poetry_db->half_lines_with_char(required);
         for (const auto& hl : hls) {
             int pid = poetry_db->poem_of_half_line(hl);
             std::string fl = find_full_line(pid, hl);
@@ -274,7 +300,18 @@ std::vector<std::string> Game::get_candidates() const {
             }
         }
     } else if (mode == GameMode::Chengyu && idiom_db) {
-        auto ids = idiom_db->starting_with(current_char);
+        std::vector<std::string> ids;
+        if (pinyin_mode == PinyinMatch::Char) {
+            ids = idiom_db->starting_with(required);
+        } else {
+            bool strict = (pinyin_mode == PinyinMatch::PinyinTone);
+            std::string req_py = idiom_db->get_pinyin(required);
+            if (!req_py.empty()) {
+                ids = idiom_db->starting_with_pinyin(req_py, strict);
+            } else {
+                ids = idiom_db->starting_with(required);
+            }
+        }
         for (const auto& id : ids) {
             if (used_half_lines.count(id) == 0) {
                 result.push_back(id);
@@ -320,8 +357,14 @@ std::string Game::bot_move() {
 std::string Game::to_json() const {
     json j;
     j["version"] = 1;
-    j["mode"] = (mode == GameMode::Feihualing) ? "feihualing" : "chengyu";
+    std::string mode_str;
+    if (mode == GameMode::Feihualing) mode_str = "feihualing";
+    else if (mode == GameMode::GushiJielong) mode_str = "gushijielong";
+    else mode_str = "chengyu";
+    j["mode"] = mode_str;
+    j["keyword"] = keyword;
     j["granularity"] = (int)granularity;
+    j["pinyin_mode"] = (int)pinyin_mode;
     j["current_char"] = current_char;
     j["current_player"] = current_player;
     j["game_over"] = game_over;
@@ -341,10 +384,7 @@ std::string Game::to_json() const {
             bc["percent"] = p.bot_config.percent;
             bc["seed"] = p.bot_config.seed;
             pj["bot_config"] = bc;
-            // Save bot memory as sorted array
-            json mem = json::array();
-            for (const auto& e : p.memory) mem.push_back(e);
-            pj["memory"] = mem;
+            // Bot memory is rebuilt on load from config (seed), not saved
         }
         players_arr.push_back(pj);
     }
@@ -383,8 +423,12 @@ Game Game::from_json(const std::string& json_str, PoetryDB* pdb, IdiomDB* idb) {
     json j = json::parse(json_str);
 
     std::string m = j.value("mode", "feihualing");
-    g.mode = (m == "chengyu") ? GameMode::Chengyu : GameMode::Feihualing;
+    if (m == "chengyu") g.mode = GameMode::Chengyu;
+    else if (m == "gushijielong") g.mode = GameMode::GushiJielong;
+    else g.mode = GameMode::Feihualing;
+    g.keyword = j.value("keyword", "");
     g.granularity = (UsedGranularity)j.value("granularity", (int)UsedGranularity::HalfLine);
+    g.pinyin_mode = (PinyinMatch)j.value("pinyin_mode", (int)PinyinMatch::Char);
     g.current_char = j.value("current_char", "");
     g.current_player = j.value("current_player", 0);
     g.game_over = j.value("game_over", false);
@@ -404,10 +448,18 @@ Game Game::from_json(const std::string& json_str, PoetryDB* pdb, IdiomDB* idb) {
             p.bot_config.percent = bc.value("percent", 10.0);
             p.bot_config.seed = bc.value("seed", (uint32_t)0);
         }
-        if (p.is_bot() && pj.contains("memory")) {
-            for (const auto& e : pj["memory"]) p.memory.insert(e.get<std::string>());
-        }
         g.players.push_back(p);
+    }
+    // Rebuild bot memory from config (memory is not saved to keep files small)
+    bool is_poetry = (g.mode == GameMode::Feihualing || g.mode == GameMode::GushiJielong);
+    for (auto& p : g.players) {
+        if (p.is_bot()) {
+            if (is_poetry && g.poetry_db) {
+                p.build_memory(g.poetry_db->all_half_lines());
+            } else if (g.mode == GameMode::Chengyu && g.idiom_db) {
+                p.build_memory(g.idiom_db->all_words());
+            }
+        }
     }
 
     if (j.contains("used_half_lines"))

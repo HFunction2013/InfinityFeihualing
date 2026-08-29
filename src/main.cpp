@@ -79,6 +79,13 @@ static bool load_databases() {
         return false;
     }
     std::cout << "  成语: " << g_idiom_db.count() << " 条\n";
+    // Load pinyin data for pinyin-based idiom chain
+    std::string word_path = g_data_root + "/chinese-xinhua/data/word.json";
+    if (g_idiom_db.load_pinyin(word_path)) {
+        std::cout << "  拼音: 已加载 (成语拼音接龙可用)\n";
+    } else {
+        std::cout << "  拼音: 未加载 (拼音接龙将回退到字匹配)\n";
+    }
     return true;
 }
 
@@ -90,14 +97,16 @@ static GameMode select_mode() {
     print_separator();
     std::cout << "  选择游戏模式\n";
     print_separator();
-    std::cout << "  1. 无限飞花令 (诗词接龙)\n";
-    std::cout << "  2. 成语接龙\n";
+    std::cout << "  1. 飞花令 (固定关键字, 玩家选字)\n";
+    std::cout << "  2. 古诗接龙 (末字滚动传递)\n";
+    std::cout << "  3. 成语接龙\n";
     std::cout << "  0. 返回\n";
     print_separator();
     while (true) {
-        int c = input_int("请选择", 0, 2, 1);
+        int c = input_int("请选择", 0, 3, 1);
         if (c == 1) return GameMode::Feihualing;
-        if (c == 2) return GameMode::Chengyu;
+        if (c == 2) return GameMode::GushiJielong;
+        if (c == 3) return GameMode::Chengyu;
         if (c == 0) return (GameMode)-1;
     }
 }
@@ -118,6 +127,24 @@ static UsedGranularity select_granularity() {
         case 3: return UsedGranularity::WholePoem;
     }
     return UsedGranularity::HalfLine;
+}
+
+static PinyinMatch select_pinyin_mode() {
+    clear_screen();
+    print_separator();
+    std::cout << "  成语接龙 - 选择匹配方式\n";
+    print_separator();
+    std::cout << "  1. 字匹配 (下一成语首字必须相同)\n";
+    std::cout << "  2. 拼音匹配 (声调必须相同, 如花huā接花huā)\n";
+    std::cout << "  3. 拼音匹配 (声调可不同, 如花huā接化huà)\n";
+    print_separator();
+    int c = input_int("请选择", 1, 3, 1);
+    switch (c) {
+        case 1: return PinyinMatch::Char;
+        case 2: return PinyinMatch::PinyinTone;
+        case 3: return PinyinMatch::PinyinNoTone;
+    }
+    return PinyinMatch::Char;
 }
 
 static BotConfig configure_bot(const std::string& name) {
@@ -178,9 +205,12 @@ static void setup_players(Game& game) {
 // ---------------------------------------------------------------------------
 static void print_game_state(const Game& game) {
     print_separator();
-    std::string mode_name = (game.mode == GameMode::Feihualing) ? "无限飞花令" : "成语接龙";
+    std::string mode_name;
+    if (game.mode == GameMode::Feihualing) mode_name = "飞花令";
+    else if (game.mode == GameMode::GushiJielong) mode_name = "古诗接龙";
+    else mode_name = "成语接龙";
     std::cout << "  " << mode_name;
-    if (game.mode == GameMode::Feihualing) {
+    if (game.mode == GameMode::Feihualing || game.mode == GameMode::GushiJielong) {
         std::string gname;
         switch (game.granularity) {
             case UsedGranularity::HalfLine: gname = "半句不可复用"; break;
@@ -202,9 +232,26 @@ static void print_game_state(const Game& game) {
     }
     std::cout << "\n";
 
-    // Current required char
-    if (!game.current_char.empty()) {
-        std::cout << "  当前需要的字: 「" << game.current_char << "」\n";
+    // Required char / keyword
+    if (game.mode == GameMode::Feihualing) {
+        if (!game.keyword.empty()) {
+            std::cout << "  飞花令关键字: 「" << game.keyword << "」 (所有诗句必须包含此字)\n";
+        }
+    } else {
+        if (!game.current_char.empty()) {
+            std::cout << "  当前需要的字: 「" << game.current_char << "」";
+            if (game.mode == GameMode::Chengyu && game.idiom_db && game.idiom_db->pinyin_loaded()) {
+                std::string py = game.idiom_db->get_pinyin(game.current_char);
+                if (!py.empty()) {
+                    if (game.pinyin_mode == PinyinMatch::PinyinTone) {
+                        std::cout << " (拼音: " << py << ", 声调必须相同)";
+                    } else if (game.pinyin_mode == PinyinMatch::PinyinNoTone) {
+                        std::cout << " (拼音: " << py << ", 声调可不同)";
+                    }
+                }
+            }
+            std::cout << "\n";
+        }
     }
 
     // Last few moves
@@ -240,7 +287,7 @@ static void game_loop(Game& game) {
 
         // Human turn
         std::cout << "\n  轮到 " << game.current().name << "\n";
-        std::cout << "  输入你的" << (game.mode == GameMode::Feihualing ? "诗句" : "成语")
+        std::cout << "  输入你的" << (game.mode == GameMode::Chengyu ? "成语" : "诗句")
                   << " (输入 /save 存档, /hint 提示, /quit 退出):\n  > ";
         std::string input;
         std::getline(std::cin, input);
@@ -292,7 +339,11 @@ static void game_loop(Game& game) {
         ValidateResult vr = game.validate(input);
         if (vr.valid) {
             game.apply_move(input);
-            std::cout << "  有效！下一个字: 「" << game.current_char << "」\n";
+            if (game.mode == GameMode::Feihualing) {
+                std::cout << "  有效！\n";
+            } else {
+                std::cout << "  有效！下一个字: 「" << game.current_char << "」\n";
+            }
             // Small pause for feedback
             pause();
         } else {
@@ -385,7 +436,7 @@ static void main_menu() {
             std::cout << "  关于\n";
             print_separator();
             std::cout << "  基于 chinese-poetry 和 chinese-xinhua 数据库\n";
-            std::cout << "  支持无限飞花令和成语接龙\n";
+            std::cout << "  支持飞花令(固定关键字)、古诗接龙、成语接龙\n";
             std::cout << "  多玩家 / 多机器人 / 存档防篡改\n";
             std::cout << "  数据来源:\n";
             std::cout << "    - github.com/chinese-poetry/chinese-poetry\n";
@@ -406,14 +457,39 @@ static void main_menu() {
             if ((int)mode == -1) continue;
 
             UsedGranularity granularity = UsedGranularity::HalfLine;
-            if (mode == GameMode::Feihualing) {
+            bool is_poetry = (mode == GameMode::Feihualing || mode == GameMode::GushiJielong);
+            if (is_poetry) {
                 granularity = select_granularity();
+            }
+
+            // 飞花令: 玩家选择固定关键字
+            std::string keyword;
+            if (mode == GameMode::Feihualing) {
+                clear_screen();
+                print_separator();
+                std::cout << "  飞花令 - 选择关键字\n";
+                print_separator();
+                std::cout << "  所有玩家说出的诗句都必须包含这个字。\n";
+                std::cout << "  推荐字: 月 花 山 水 风 云 春 秋 夜 雨 雪 酒 人 心 天\n\n";
+                while (true) {
+                    keyword = input_line("请输入一个汉字作为关键字: ");
+                    keyword = t2s::convert(keyword);
+                    keyword = utils::strip_punct(keyword);
+                    keyword = utils::trim(keyword);
+                    if (utils::utf8_len(keyword) == 1 && utils::is_cjk_char(keyword)) break;
+                    std::cout << "  请输入一个有效的汉字。\n";
+                }
             }
 
             Game game;
             game.poetry_db = &g_poetry_db;
             game.idiom_db = &g_idiom_db;
             game.setup(mode, granularity);
+            // 成语接龙: 选择匹配方式 (字/拼音声调/拼音无声调)
+            if (mode == GameMode::Chengyu && g_idiom_db.pinyin_loaded()) {
+                game.pinyin_mode = select_pinyin_mode();
+            }
+            game.keyword = keyword;
             setup_players(game);
 
             if (game.players.empty()) {

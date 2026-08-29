@@ -7,9 +7,10 @@
 #include "poetry_db.hpp"
 #include "idiom_db.hpp"
 
-enum class GameMode { Feihualing, Chengyu };
+enum class GameMode { Feihualing, GushiJielong, Chengyu };
 
-enum class UsedGranularity { HalfLine, FullLine, WholePoem };  // only for Feihualing
+enum class UsedGranularity { HalfLine, FullLine, WholePoem };
+enum class PinyinMatch { Char, PinyinTone, PinyinNoTone };
 
 struct MoveRecord {
     std::string player_name;
@@ -30,9 +31,11 @@ class Game {
 public:
     GameMode mode = GameMode::Feihualing;
     UsedGranularity granularity = UsedGranularity::HalfLine;
+    PinyinMatch pinyin_mode = PinyinMatch::Char;  // 仅成语接龙有效
     std::vector<Player> players;
     int current_player = 0;
-    std::string current_char;   // required char for next move
+    std::string current_char;   // required char for chain modes (古诗接龙/成语接龙)
+    std::string keyword;        // fixed keyword for 飞花令 mode
     bool game_over = false;
     std::string winner;
     std::vector<MoveRecord> history;
@@ -80,7 +83,7 @@ public:
     static std::string last_cjk_char(const std::string& text);
 
 private:
-    ValidateResult validate_feihualing(const std::string& text) const;
+    ValidateResult validate_poetry(const std::string& text) const;
     ValidateResult validate_chengyu(const std::string& text) const;
     bool is_used_feihualing(const std::string& half_line, int poem_idx, const std::string& full_line) const;
     void mark_used_feihualing(const std::string& half_line, int poem_idx, const std::string& full_line);
