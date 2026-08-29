@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows
+            artifact: FeihuaLing.exe
+          - os: ubuntu-latest
+            name: linux
+            artifact: FeihuaLing
+          - os: macos-latest
+            name: macos
+            artifact: FeihuaLing
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (Windows)
+        if: matrix.name == 'windows'
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+
+      - name: Configure (Linux)
+        if: matrix.name == 'linux'
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Configure (macOS universal)
+        if: matrix.name == 'macos'
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"
+
+      - name: Build
+        run: cmake --build build --config Release -j
+
+      - name: Locate binary
+        id: locate
+        shell: bash
+        run: |
+          if [ -f build/Release/${{ matrix.artifact }} ]; then
+            echo "bin=build/Release/${{ matrix.artifact }}" >> $GITHUB_OUTPUT
+          elif [ -f build/${{ matrix.artifact }} ]; then
+            echo "bin=build/${{ matrix.artifact }}" >> $GITHUB_OUTPUT
+          else
+            find build -name "${{ matrix.artifact }}" -type f
+            echo "bin=$(find build -name '${{ matrix.artifact }}' -type f | head -1)" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p pkg
+          cp "${{ steps.locate.outputs.bin }}" pkg/
+          if [ "${{ matrix.name }}" = "windows" ]; then
+            cp download_data.bat pkg/
+          else
+            cp download_data.sh pkg/
+          fi
+          cp README.md pkg/ 2>/dev/null || true
+          cd pkg
+          if [ "${{ matrix.name }}" = "windows" ]; then
+            7z a ../FeihuaLing-${{ matrix.name }}.zip *
+          else
+            zip -r ../FeihuaLing-${{ matrix.name }}.zip *
+          fi
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: FeihuaLing-${{ matrix.name }}.zip
+          generate_release_notes: true

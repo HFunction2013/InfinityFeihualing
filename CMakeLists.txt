@@ -25,11 +25,13 @@ set(SOURCES
 
 add_executable(FeihuaLing ${SOURCES})
 
-# Copy data directory to output for running convenience
-add_custom_command(TARGET FeihuaLing POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E create_symlink
-        ${CMAKE_SOURCE_DIR}/third_party
-        $<TARGET_FILE_DIR:FeihuaLing>/third_party
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        $<TARGET_FILE_DIR:FeihuaLing>/saves
-)
+# Convenience: symlink data dir next to binary (skip on Windows to avoid symlink permission issues)
+if(NOT WIN32)
+    add_custom_command(TARGET FeihuaLing POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E create_symlink
+            ${CMAKE_SOURCE_DIR}/third_party
+            $<TARGET_FILE_DIR:FeihuaLing>/third_party
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            $<TARGET_FILE_DIR:FeihuaLing>/saves
+    )
+endif()
