@@ -16,57 +16,62 @@ jobs:
         include:
           - os: windows-latest
             name: windows
-            artifact: FeihuaLing.exe
+            bin_path: bin/x64/Release/FeihuaLing.exe
           - os: ubuntu-latest
             name: linux
-            artifact: FeihuaLing
+            bin_path: build/FeihuaLing
           - os: macos-latest
             name: macos
-            artifact: FeihuaLing
+            bin_path: build/FeihuaLing
 
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure (Windows)
+      # ---- Windows: MSBuild (same as build.yml) ----
+      - name: Add MSVC to PATH
         if: matrix.name == 'windows'
-        run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+        uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Configure (Linux)
+      - name: Build with MSBuild
+        if: matrix.name == 'windows'
+        run: msbuild FeihuaLing.sln /p:Configuration=Release /p:Platform=x64 /m
+
+      # ---- Linux: CMake + gcc ----
+      - name: Install dependencies (Linux)
+        if: matrix.name == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake g++
+
+      - name: Configure CMake (Linux)
         if: matrix.name == 'linux'
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
-      - name: Configure (macOS universal)
+      # ---- macOS: CMake + clang universal ----
+      - name: Install dependencies (macOS)
         if: matrix.name == 'macos'
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"
+        run: brew install cmake
 
+      - name: Configure CMake (macOS)
+        if: matrix.name == 'macos'
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+      # ---- Build (Linux/macOS) ----
       - name: Build
-        run: cmake --build build --config Release -j
+        if: matrix.name != 'windows'
+        run: cmake --build build -j
 
-      - name: Locate binary
-        id: locate
-        shell: bash
-        run: |
-          if [ -f build/Release/${{ matrix.artifact }} ]; then
-            echo "bin=build/Release/${{ matrix.artifact }}" >> $GITHUB_OUTPUT
-          elif [ -f build/${{ matrix.artifact }} ]; then
-            echo "bin=build/${{ matrix.artifact }}" >> $GITHUB_OUTPUT
-          else
-            find build -name "${{ matrix.artifact }}" -type f
-            echo "bin=$(find build -name '${{ matrix.artifact }}' -type f | head -1)" >> $GITHUB_OUTPUT
-          fi
-
+      # ---- Package ----
       - name: Package
         shell: bash
         run: |
           mkdir -p pkg
-          cp "${{ steps.locate.outputs.bin }}" pkg/
+          cp "${{ matrix.bin_path }}" pkg/
           if [ "${{ matrix.name }}" = "windows" ]; then
             cp download_data.bat pkg/
           else
             cp download_data.sh pkg/
           fi
-          cp README.md pkg/ 2>/dev/null || true
+          cp README.md pkg/
           cd pkg
           if [ "${{ matrix.name }}" = "windows" ]; then
             7z a ../FeihuaLing-${{ matrix.name }}.zip *
